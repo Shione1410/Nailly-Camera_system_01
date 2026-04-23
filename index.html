@@ -2,36 +2,61 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nailly - Measurement Engine v1.1</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Nailly - Measurement Engine v1.2</title>
     <script async src="https://docs.opencv.org/4.x/opencv.js" type="text/javascript"></script>
     <style>
-        body { margin: 0; background: #1a1a1a; color: #00ffff; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        :root { --main-cyan: #00ffff; --bg-dark: #121212; }
+        body { margin: 0; background: var(--bg-dark); color: var(--main-cyan); font-family: 'Segoe UI', Roboto, sans-serif; overflow: hidden; }
         #container { position: relative; width: 100vw; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        
+        /* 映像レイヤー */
         video, canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; }
-        #overlay-ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; border: 2px solid rgba(0, 255, 255, 0.2); box-sizing: border-box; }
-        #info { position: absolute; top: env(safe-area-inset-top, 20px); left: 20px; background: rgba(0,0,0,0.8); padding: 15px; border-radius: 12px; border: 1px solid #00ffff; z-index: 100; font-size: 11px; line-height: 1.5; box-shadow: 0 0 15px rgba(0,255,255,0.3); }
-        #start-btn { position: absolute; z-index: 200; padding: 15px 40px; font-size: 18px; background: #00ffff; color: #000; border: none; border-radius: 50px; cursor: pointer; font-weight: bold; box-shadow: 0 0 20px #00ffff; }
-        .magic-ring { border: 3px solid #00ffff; border-radius: 50%; position: absolute; pointer-events: none; box-shadow: 0 0 20px #00ffff, inset 0 0 10px #00ffff; display: none; z-index: 50; }
-        .status-ok { color: #00ff00; font-weight: bold; }
-        .status-err { color: #ff0000; }
+        
+        /* UIレイヤー */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        #log-panel { 
+            position: absolute; top: 40px; left: 20px; 
+            background: rgba(0,0,0,0.7); padding: 15px; border-radius: 10px; 
+            border-left: 3px solid var(--main-cyan); font-size: 12px; pointer-events: auto;
+        }
+        
+        /* 起動ボタン (中央) */
+        #start-btn { 
+            position: absolute; z-index: 100; 
+            padding: 18px 45px; font-size: 18px; font-weight: bold;
+            background: var(--main-cyan); color: #000; border: none; border-radius: 50px; 
+            box-shadow: 0 0 30px rgba(0,255,255,0.5); cursor: pointer;
+            transition: all 0.3s;
+        }
+        #start-btn:disabled { background: #444; color: #888; box-shadow: none; cursor: not-allowed; }
+
+        /* 魔法陣 (1円玉ガイド) */
+        .magic-ring { 
+            border: 3px solid var(--main-cyan); border-radius: 50%; 
+            position: absolute; pointer-events: none; 
+            box-shadow: 0 0 20px var(--main-cyan), inset 0 0 10px var(--main-cyan); 
+            display: none; z-index: 5;
+            transition: width 0.1s, height 0.1s;
+        }
+        .status-ok { color: #00ff00; }
     </style>
 </head>
 <body>
+
     <div id="container">
-        <div id="info">
-            <strong>[ Nailly System Log ]</strong><br>
-            System: <span id="status">Wait...</span><br>
+        <div id="log-panel">
+            <strong>[ Nailly Engine v1.2 ]</strong><br>
+            System: <span id="status">Loading Core...</span><br>
             PPM: <span id="ppm">0.00</span><br>
-            Object: <span id="detect">Scanning...</span><br>
-            <small id="error-msg" class="status-err"></small>
+            Detect: <span id="detect">---</span>
         </div>
-        
-        <button id="start-btn">Start Nailly</button>
+
+        <button id="start-btn" disabled>Wait for Core...</button>
 
         <video id="videoInput" playsinline></video>
         <canvas id="canvasOutput"></canvas>
-        <div id="overlay-ui"></div>
+        
         <div id="targetRing" class="magic-ring"></div>
     </div>
 
@@ -40,42 +65,52 @@
         const canvas = document.getElementById('canvasOutput');
         const startBtn = document.getElementById('start-btn');
         const statusText = document.getElementById('status');
-        const errorMsg = document.getElementById('error-msg');
         const ppmText = document.getElementById('ppm');
         const detectText = document.getElementById('detect');
         const targetRing = document.getElementById('targetRing');
 
-        // 1. カメラ起動プロトコル
-        async function initNailly() {
+        // --- 1. OpenCVロード監視プロトコル ---
+        function checkOpenCvReady() {
+            if (typeof cv !== 'undefined' && cv.Mat) {
+                statusText.innerHTML = '<span class="status-ok">Core Loaded.</span>';
+                startBtn.innerText = "Start Nailly";
+                startBtn.disabled = false;
+            } else {
+                setTimeout(checkOpenCvReady, 500);
+            }
+        }
+
+        // --- 2. Nailly 起動シーケンス ---
+        async function startNailly() {
             try {
-                startBtn.style.display = 'none';
-                statusText.innerText = "Accessing Camera...";
+                startBtn.innerText = "Connecting...";
+                startBtn.disabled = true;
+
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: false 
+                });
                 
-                const constraints = { 
-                    video: { 
-                        facingMode: "environment", 
-                        width: { ideal: 1280 }, 
-                        height: { ideal: 720 } 
-                    } 
-                };
-                
-                const stream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = stream;
                 await video.play();
+
+                startBtn.style.display = 'none';
+                statusText.innerHTML = '<span class="status-ok">Active (HTTPS)</span>';
                 
-                statusText.innerHTML = '<span class="status-ok">Nailly Online</span>';
-                processVideo();
+                // 解析処理開始
+                runAnalysis();
                 
             } catch (err) {
                 console.error(err);
-                errorMsg.innerText = "Error: " + err.name + "\n(HTTPS環境が必要です)";
-                startBtn.style.display = 'block';
+                statusText.innerText = "Failed";
+                alert("カメラを起動できません。HTTPS環境か確認してください。\nError: " + err.message);
+                startBtn.disabled = false;
                 startBtn.innerText = "Retry";
             }
         }
 
-        // 2. 画像解析プロセス
-        function processVideo() {
+        // --- 3. メイン解析ループ ---
+        function runAnalysis() {
             const width = video.videoWidth;
             const height = video.videoHeight;
             canvas.width = width;
@@ -85,59 +120,51 @@
             let gray = new cv.Mat();
             let cap = new cv.VideoCapture(video);
 
-            function loop() {
+            function process() {
                 try {
                     cap.read(src);
                     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+                    // ノイズ除去
                     cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 1.5);
 
                     let circles = new cv.Mat();
-                    // 1円玉検出パラメータ最適化
-                    cv.HoughCircles(gray, circles, cv.HOUGH_GRADIENT, 1, 50, 80, 40, 40, 150);
+                    // HoughCircles: 1円玉(20mm)を検知
+                    cv.HoughCircles(gray, circles, cv.HOUGH_GRADIENT, 1, 60, 80, 40, 35, 120);
 
                     if (circles.cols > 0) {
                         let x = circles.data32F[0];
                         let y = circles.data32F[1];
                         let r = circles.data32F[2];
 
+                        // PPM算出 (1円玉の直径は20mm)
                         const ppm = (r * 2) / 20;
                         ppmText.innerText = ppm.toFixed(2);
-                        detectText.innerHTML = '<span class="status-ok">1円玉確認</span>';
-                        
-                        const scaleX = window.innerWidth / width;
-                        const scaleY = window.innerHeight / height;
-                        
+                        detectText.innerHTML = '<span class="status-ok">1円玉を捕捉</span>';
+
+                        // UI表示更新 (画面サイズへのスケーリング)
+                        const scale = window.innerWidth / width;
                         targetRing.style.display = 'block';
-                        targetRing.style.width = `${(r * 2) * scaleX}px`;
-                        targetRing.style.height = `${(r * 2) * scaleY}px`;
-                        targetRing.style.left = `${(x - r) * scaleX}px`;
-                        targetRing.style.top = `${(y - r) * scaleY}px`;
+                        targetRing.style.width = `${(r * 2) * scale}px`;
+                        targetRing.style.height = `${(r * 2) * scale}px`;
+                        targetRing.style.left = `${(x - r) * scale}px`;
+                        targetRing.style.top = `${(y - r) * scale}px`;
                     } else {
-                        detectText.innerText = "1円玉を探してください";
+                        detectText.innerText = "1円玉を探しています...";
                         targetRing.style.display = 'none';
                     }
 
                     circles.delete();
-                    requestAnimationFrame(loop);
+                    requestAnimationFrame(process);
                 } catch (e) {
-                    console.error(e);
+                    console.error("Loop Error:", e);
                 }
             }
-            loop();
+            process();
         }
 
-        // OpenCVロード待ち
-        window.onload = () => {
-            if (typeof cv !== 'undefined') {
-                statusText.innerText = "Ready to Boot";
-            } else {
-                document.querySelector('script[src*="opencv.js"]').onload = () => {
-                    statusText.innerText = "Ready to Boot";
-                };
-            }
-        };
-
-        startBtn.addEventListener('click', initNailly);
+        // 監視開始
+        checkOpenCvReady();
+        startBtn.addEventListener('click', startNailly);
     </script>
 </body>
 </html>
