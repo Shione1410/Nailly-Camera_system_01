@@ -3,74 +3,91 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nailly v2.1 - Debug Boot</title>
+    <title>Nailly v2.2 - Local Load</title>
     <style>
         body { margin: 0; background: #121212; color: #00ffff; font-family: monospace; display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; }
-        #status-box { background: rgba(0,0,0,0.8); padding: 20px; border: 1px solid #00ffff; border-radius: 8px; width: 80%; max-width: 400px; }
-        .log-line { font-size: 12px; margin: 5px 0; }
+        #status-box { background: rgba(0,0,0,0.8); padding: 20px; border: 1px solid #00ffff; border-radius: 8px; text-align: center; }
         #start-btn { 
-            margin-top: 20px; padding: 15px 30px; font-size: 16px; font-weight: bold;
+            margin-top: 20px; padding: 15px 40px; font-size: 18px; font-weight: bold;
             background: #333; color: #666; border: none; border-radius: 50px; cursor: not-allowed;
+            transition: 0.3s;
         }
         #start-btn.ready { background: #00ffff; color: #000; cursor: pointer; box-shadow: 0 0 20px #00ffff; }
-        video { position: absolute; width: 100%; height: 100%; object-fit: cover; display: none; }
+        video, canvas { position: absolute; width: 100%; height: 100%; object-fit: cover; display: none; }
     </style>
 </head>
 <body>
 
     <div id="status-box">
-        <div class="log-line">1. Network: <span id="log-net">Connecting...</span></div>
-        <div class="log-line">2. Library: <span id="log-lib">Loading...</span></div>
-        <div class="log-line">3. Engine: <span id="log-eng">Initializing...</span></div>
+        <div>Nailly System v2.2</div>
+        <div id="loader-msg" style="margin-top:10px; font-size:12px;">リポジトリから Core を読込中...</div>
+        <button id="start-btn" disabled>STANDBY</button>
     </div>
 
-    <button id="start-btn" disabled>Core Loading...</button>
     <video id="videoInput" playsinline></video>
+    <canvas id="canvasOutput"></canvas>
+
+    <script async src="opencv.js" type="text/javascript"></script>
 
     <script>
-        // 読み込み完了フラグ
-        var cvReady = false;
+        const startBtn = document.getElementById('start-btn');
+        const loaderMsg = document.getElementById('loader-msg');
 
-        // OpenCVの読み込み完了時に呼ばれるグローバル関数
+        // OpenCVの初期化完了を検知する
         var Module = {
             onRuntimeInitialized: function() {
-                console.log("OpenCV Runtime Initialized");
-                document.getElementById('log-eng').innerText = "READY";
-                document.getElementById('log-eng').style.color = "#00ff00";
-                cvReady = true;
-                enableButton();
+                loaderMsg.innerText = "Core Initialized. Ready to Launch.";
+                loaderMsg.style.color = "#00ff00";
+                startBtn.innerText = "Nailly 起動";
+                startBtn.classList.add('ready');
+                startBtn.disabled = false;
             }
         };
 
-        function enableButton() {
-            const btn = document.getElementById('start-btn');
-            btn.innerText = "Nailly 起動";
-            btn.classList.add('ready');
-            btn.disabled = false;
-        }
-
-        // タイムアウト監視（30秒経ってもダメなら警告）
-        setTimeout(() => {
-            if (!cvReady) {
-                document.getElementById('log-lib').innerText = "TIMEOUT (Retry recommended)";
-                document.getElementById('log-lib').style.color = "#ff4444";
-            }
-        }, 30000);
-    </script>
-    <script async src="https://cdnjs.cloudflare.com/ajax/libs/opencv.js/4.5.4/opencv.js" 
-            onload="document.getElementById('log-lib').innerText='DOWNLOADED'; document.getElementById('log-lib').style.color='#00ff00';"
-            onerror="document.getElementById('log-lib').innerText='FAILED';"></script>
-
-    <script>
-        document.getElementById('start-btn').onclick = async () => {
+        startBtn.onclick = async () => {
             document.getElementById('status-box').style.display = 'none';
-            document.getElementById('start-btn').style.display = 'none';
             const video = document.getElementById('videoInput');
+            const canvas = document.getElementById('canvasOutput');
             video.style.display = 'block';
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-            video.srcObject = stream;
-            video.play();
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment", width: 1280 } 
+                });
+                video.srcObject = stream;
+                await video.play();
+                startAnalysis();
+            } catch (err) {
+                alert("Camera Error: " + err.message);
+            }
         };
+
+        function startAnalysis() {
+            // ここに前述の円検出ロジックを記述（理解を深めるための核となる部分）
+            let src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+            let gray = new cv.Mat();
+            let cap = new cv.VideoCapture(video);
+
+            function loop() {
+                cap.read(src);
+                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+                cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 1.5);
+                let circles = new cv.Mat();
+                cv.HoughCircles(gray, circles, cv.HOUGH_GRADIENT, 1, 60, 75, 40, 30, 150);
+
+                if (circles.cols > 0) {
+                    let x = circles.data32F[0];
+                    let y = circles.data32F[1];
+                    let r = circles.data32F[2];
+                    // 1mm = ppm px の計算
+                    const ppm = (r * 2) / 20; 
+                    console.log("Current PPM:", ppm);
+                }
+                circles.delete();
+                requestAnimationFrame(loop);
+            }
+            loop();
+        }
     </script>
 </body>
 </html>
