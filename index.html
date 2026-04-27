@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nailly v2.2 - Local Load</title>
     <style>
-        body { margin: 0; background: #121212; color: #00ffff; font-family: monospace; display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; }
-        #status-box { background: rgba(0,0,0,0.8); padding: 20px; border: 1px solid #00ffff; border-radius: 8px; text-align: center; }
+        body { margin: 0; background: #121212; color: #00ffff; font-family: monospace; display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; overflow: hidden; }
+        #status-box { background: rgba(0,0,0,0.8); padding: 20px; border: 1px solid #00ffff; border-radius: 8px; text-align: center; z-index: 10; }
         #start-btn { 
             margin-top: 20px; padding: 15px 40px; font-size: 18px; font-weight: bold;
             background: #333; color: #666; border: none; border-radius: 50px; cursor: not-allowed;
@@ -24,7 +24,7 @@
         <button id="start-btn" disabled>STANDBY</button>
     </div>
 
-    <video id="videoInput" playsinline></video>
+    <video id="videoInput" playsinline muted autoplay></video>
     <canvas id="canvasOutput"></canvas>
 
     <script async src="opencv.js" type="text/javascript"></script>
@@ -32,8 +32,10 @@
     <script>
         const startBtn = document.getElementById('start-btn');
         const loaderMsg = document.getElementById('loader-msg');
+        const video = document.getElementById('videoInput');
+        const canvas = document.getElementById('canvasOutput');
 
-        // OpenCVの初期化完了を検知する
+        // OpenCVの初期化完了を検知
         var Module = {
             onRuntimeInitialized: function() {
                 loaderMsg.innerText = "Core Initialized. Ready to Launch.";
@@ -46,45 +48,70 @@
 
         startBtn.onclick = async () => {
             document.getElementById('status-box').style.display = 'none';
-            const video = document.getElementById('videoInput');
-            const canvas = document.getElementById('canvasOutput');
             video.style.display = 'block';
             
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "environment", width: 1280 } 
+                    video: { 
+                        facingMode: "environment", 
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    } 
                 });
                 video.srcObject = stream;
-                await video.play();
+                
+                // ビデオのメタデータ読み込みと再生開始を確実に待機
+                await new Promise((resolve) => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        resolve();
+                    };
+                });
+
                 startAnalysis();
             } catch (err) {
                 alert("Camera Error: " + err.message);
+                document.getElementById('status-box').style.display = 'block';
             }
         };
 
         function startAnalysis() {
-            // ここに前述の円検出ロジックを記述（理解を深めるための核となる部分）
+            // 解析用変数の初期化
             let src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
             let gray = new cv.Mat();
             let cap = new cv.VideoCapture(video);
 
             function loop() {
-                cap.read(src);
-                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-                cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 1.5);
-                let circles = new cv.Mat();
-                cv.HoughCircles(gray, circles, cv.HOUGH_GRADIENT, 1, 60, 75, 40, 30, 150);
+                try {
+                    // ビデオが有効な場合のみ処理を実行
+                    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                        cap.read(src);
+                        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+                        
+                        // ノイズ除去（iPhoneの負荷を考慮しサイズは控えめ）
+                        cv.GaussianBlur(gray, gray, new cv.Size(7, 7), 1.5);
+                        
+                        let circles = new cv.Mat();
+                        // 円検出実行
+                        cv.HoughCircles(gray, circles, cv.HOUGH_GRADIENT, 1, 60, 75, 40, 30, 150);
 
-                if (circles.cols > 0) {
-                    let x = circles.data32F[0];
-                    let y = circles.data32F[1];
-                    let r = circles.data32F[2];
-                    // 1mm = ppm px の計算
-                    const ppm = (r * 2) / 20; 
-                    console.log("Current PPM:", ppm);
+                        if (circles.cols > 0) {
+                            let x = circles.data32F[0];
+                            let y = circles.data32F[1];
+                            let r = circles.data32F[2];
+                            
+                            // 1mm = ppm px の計算
+                            const ppm = (r * 2) / 20; 
+                            console.log("Current PPM:", ppm);
+                        }
+                        
+                        // メモリ解放（これを忘れるとiPhoneでは即座にフリーズします）
+                        circles.delete();
+                    }
+                    requestAnimationFrame(loop);
+                } catch (err) {
+                    console.error("Analysis Loop Error:", err);
                 }
-                circles.delete();
-                requestAnimationFrame(loop);
             }
             loop();
         }
